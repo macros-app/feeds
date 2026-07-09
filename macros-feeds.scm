@@ -59,10 +59,14 @@
 ;; or a list of URL + tags (symbols or strings) auto-applied to NEW entries.
 (define *feeds-list* '())
 
-;; Where the database file lives.
+;; Where the database file lives, and the filter the search buffer starts
+;; with (elfeed's default). Both are ALSO settable from init.scm as the
+;; "feeds-db-file" / "feeds-filter" options — the option, when set, wins over
+;; the global (same init-reachability story as the feed list above: a config
+;; thunk can `set-option` but cannot `set!` these globals). Options are read
+;; lazily at use time because `set-option` is queued — a value set in the
+;; config thunk isn't visible while the package is still loading.
 (define *feeds-db-file* (string-append (getenv "HOME") "/.macros-feeds-db"))
-
-;; The filter the search buffer starts with (elfeed's default).
 (define *feeds-search-filter* "@6-months-ago +unread")
 
 ;; Search-buffer column widths (chars) and show-buffer wrap width.
@@ -88,7 +92,7 @@
    'db          (hash)  ; id → entry hash
    'ids         '()     ; every id, insertion order (drives persistence)
    'loaded      #f      ; db file has been read this session
-   'filter      *feeds-search-filter*
+   'filter      #f      ; the ACTIVE filter; #f = not set yet → (ef--filter) default
    'view        '()     ; ids currently rendered, display order
    'view-offset 3       ; buffer line of the first entry row
    'current     #f      ; id shown in *feeds-entry*
@@ -99,6 +103,25 @@
 
 (define (ef--st key)    (hash-try-get *feeds-state* key))
 (define (ef--st! key v) (set! *feeds-state* (hash-insert *feeds-state* key v)))
+
+;; A config knob: the named option when it's set to a string, else the
+;; global's value (the k8s pattern — options are init.scm's only channel).
+(define (ef--knob opt fallback)
+  (let ((v (get-option opt)))
+    (if (string? v) v fallback)))
+
+;; Expand a leading ~/ (an option value may use it; the Rust file primitives
+;; want an absolute path).
+(define (ef--expand-home p)
+  (if (and (> (string-length p) 1) (equal? (substring p 0 2) "~/"))
+      (string-append (getenv "HOME") (substring p 1 (string-length p)))
+      p))
+
+(define (ef--db-file) (ef--expand-home (ef--knob "feeds-db-file" *feeds-db-file*)))
+
+;; The active search filter: the runtime value once the user has set one
+;; (`s`), else the configured default.
+(define (ef--filter) (or (ef--st 'filter) (ef--knob "feeds-filter" *feeds-search-filter*)))
 
 ;; ── tiny helpers (self-contained, byte/char-safe) ───────────────────────────
 (define (ef--trim s) (replace-regexp-in-string "^\\s+|\\s+$" "" s))
@@ -366,7 +389,7 @@
 (define (ef--db-save)
   (let loop ((ids (reverse (ef--st 'ids))) (lines '("macros-feeds-db 1")))
     (if (null? ids)
-        (write-file *feeds-db-file*
+        (write-file (ef--db-file)
                     (string-append (ef--join (reverse lines) "\n") "\n"))
         (let ((e (hash-try-get (ef--st 'db) (car ids))))
           (loop (cdr ids) (if e (cons (ef--entry-line e) lines) lines))))))
@@ -376,8 +399,8 @@
     (ef--st! 'loaded #t)
     ;; Migration: this package used to be macros-elfeed; if the new db file
     ;; doesn't exist yet, read the old one (the next save writes the new path).
-    (let ((path (if (file-exists? *feeds-db-file*)
-                    *feeds-db-file*
+    (let ((path (if (file-exists? (ef--db-file))
+                    (ef--db-file)
                     (string-append (getenv "HOME") "/.macros-elfeed-db"))))
      (when (file-exists? path)
       (let loop ((lines (ef--split-char (read-file path) #\newline)))
@@ -489,7 +512,7 @@
 
 ;; The filtered view: newest first, capped by #limit.
 (define (ef--visible-ids)
-  (let* ((flt (ef--parse-filter (ef--st 'filter)))
+  (let* ((flt (ef--parse-filter (ef--filter)))
          (db (ef--st 'db))
          (vis (filter (lambda (id)
                         (let ((e (hash-try-get db id)))
@@ -539,7 +562,7 @@
          (total (length (ef--st 'ids)))
          (header (string-append "Feeds — " (number->string (length ids)) "/"
                                 (number->string total) " entries — filter: "
-                                (ef--st 'filter)))
+                                (ef--filter)))
          (already? (equal? (current-buffer) "*feeds-search*")))
     (ef--st! 'view ids)
     (let loop ((rest ids) (idx 3)
@@ -787,7 +810,7 @@
                 (lambda (input)
                   (ef--st! 'filter (ef--trim input))
                   (ef--search-render #t 'top))
-                (ef--st 'filter)))
+                (ef--filter)))
 
 (define (feeds-search-refresh) (ef--search-render #t 'keep))
 (define (feeds-search-quit) (switch-to-buffer "*scratch*"))

@@ -84,20 +84,26 @@ A space-separated list of terms, all of which must hold:
 - `regex` — title or feed title must match (case-insensitive)
 - `!regex` — …must not match
 
-The default is `@6-months-ago +unread` (set `*feeds-search-filter*` to taste).
+The default is `@6-months-ago +unread` (the `"feeds-filter"` option, below).
 
 ## Configuration knobs
 
-| variable                 | default                | meaning                        |
+The first three are **options** — settable from an init.scm `'config` thunk
+via `(set-option "name" "value")`, which is the only channel that works from
+there (Steel compiles init.scm as one unit, so a thunk cannot `set!` a
+package's globals). Each option falls back to a same-purpose global when
+unset. The remaining knobs are plain globals: nobody sets those per-machine,
+and they remain reachable via eval or by editing this file.
+
+| knob                     | default                | meaning                        |
 |--------------------------|------------------------|--------------------------------|
-| `"feeds"` option  | unset                  | the feed list (init.scm channel) |
-| `*feeds-list*`         | `'()`                  | fallback feed list             |
-| `*feeds-db-file*`       | `~/.macros-feeds-db`  | database path                  |
-| `*feeds-search-filter*` | `@6-months-ago +unread`| initial filter                 |
-| `*feeds-feed-width*`    | `18`                   | feed column width (chars)      |
-| `*feeds-title-width*`   | `90`                   | title truncation width         |
-| `*feeds-show-width*`    | `80`                   | show-buffer wrap width         |
-| `*feeds-user-agent*`    | Mozilla/5.0 …          | request User-Agent             |
+| `"feeds"` option         | unset (`*feeds-list*`, `'()`) | the feed list: `url\|tag,tag …` |
+| `"feeds-db-file"` option | unset (`*feeds-db-file*`, `~/.macros-feeds-db`) | database path (`~/` ok) |
+| `"feeds-filter"` option  | unset (`*feeds-search-filter*`, `@6-months-ago +unread`) | initial filter |
+| `*feeds-feed-width*`     | `18`                   | feed column width (chars)      |
+| `*feeds-title-width*`    | `90`                   | title truncation width         |
+| `*feeds-show-width*`     | `80`                   | show-buffer wrap width         |
+| `*feeds-user-agent*`     | Mozilla/5.0 …          | request User-Agent             |
 
 ## License
 

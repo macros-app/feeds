@@ -11,7 +11,12 @@ Steel.
 - **Persistent database** (`~/.macros-feeds-db`) — read/unread state, tags,
   and content survive restarts.
 - **Async fetch** via the editor's `http-request` primitive: feeds download on
-  a worker thread, one at a time off a queue; the UI never blocks.
+  a worker thread, one at a time off a queue; the UI never blocks. Progress
+  shows in the search header (`fetching 2/3`).
+- **Discoverable** — `?` in either buffer opens a menu of every command, so
+  there's nothing to memorize.
+
+![The *feeds-search* buffer: entries newest first, unread in bold, read ones dimmed, tags at the end of each line](docs/search.png)
 
 ## Install
 
@@ -39,7 +44,8 @@ you can instead set the `*feeds-list*` list: URL strings or
 
 ## Use
 
-`M-x feeds` or `C-c f`, then `G` to fetch.
+`M-x feeds` or `C-c f`, then `G` to fetch. Press `?` at any point for a
+menu of everything you can do in the current buffer.
 
 ### *feeds-search*
 
@@ -74,6 +80,8 @@ Like elfeed, marking an entry read dims its line but does not evict it from
 the view until the next refresh — even under the default `+unread` filter.
 
 ### *feeds-entry*
+
+![The *feeds-entry* buffer: title, feed, date and tags, the link, then the entry rendered as text](docs/entry.png)
 
 | key       | action                                |
 |-----------|---------------------------------------|

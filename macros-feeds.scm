@@ -1064,6 +1064,11 @@
      (define-key km "shift-g" 'evil-goto-last-line)))
  (list "evil-normal:" "helix-normal:"))
 
+;; No line-number gutter: these are list/reading views, not code (the same
+;; per-mode option core's `define-list-mode-keys` sets).
+(set-option "line-numbers:feeds-search-mode" "false")
+(set-option "line-numbers:feeds-show-mode" "false")
+
 (define-key "fundamental" "ctrl-c f" 'feeds)
 
 (register-command "feeds")

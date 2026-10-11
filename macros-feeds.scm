@@ -25,16 +25,23 @@
 ;;   in *feeds-search*:
 ;;     enter / click    show the entry on this line (marks it read)
 ;;     b                open the entry's link in the system browser (marks read)
-;;     r / u            mark read / unread
+;;     y                copy the entry's link
+;;     r / u            mark read / unread (and move down)
+;;     A                mark every entry in the view read (asks first)
 ;;     + / -            add / remove a tag on the entry at point
-;;     s                edit the filter
+;;     s / c            edit the filter / reset it to the default
 ;;     g                refresh the view from the database
 ;;     G                fetch all feeds
-;;     q                bury the buffer
+;;     n / p            next / previous line
+;;     ?                menu of every command
+;;     q                back to the buffer `feeds` was opened from
 ;;
 ;;   in *feeds-entry*:
 ;;     n / p            next / previous entry in the current view
-;;     b                open this entry's link in the system browser
+;;     b / y            open / copy this entry's link
+;;     u                mark this entry unread again
+;;     + / -            add / remove a tag
+;;     ?                menu of every command
 ;;     q                back to the search buffer
 ;;
 ;; Everything here is self-contained — it only calls editor primitives, Steel
@@ -98,6 +105,9 @@
    'current     #f      ; id shown in *feeds-entry*
    'queue       '()     ; (url . tags) still to fetch this update
    'fetching    #f      ; (url . tags) in flight, or #f
+   'fetch-total 0       ; feeds queued by the running update (progress header)
+   'origin      #f      ; buffer `feeds` was opened from (`q` returns there)
+   'confirm     #f      ; pending y-or-n-p action (thunk), or #f
    'new-count   0       ; entries added by the running update
    'err-count   0))     ; feeds that failed in the running update
 
@@ -528,7 +538,15 @@
 
 ;; ── search buffer ───────────────────────────────────────────────────────────
 (define ef--search-help
-  "  enter show · b browser · r/u read/unread · +/- tag · s filter · g/gr refresh · G fetch · q quit")
+  "  enter show · b browser · y copy link · r/u read/unread · +/- tag · s/c filter · g refresh · G fetch · ? menu · q quit")
+
+;; " — fetching 2/5" while an update runs, else "".
+(define (ef--progress)
+  (if (ef--st 'fetching)
+      (string-append " — fetching "
+                     (number->string (- (ef--st 'fetch-total) (length (ef--st 'queue))))
+                     "/" (number->string (ef--st 'fetch-total)))
+      ""))
 
 (define (ef--tags-suffix tags)
   (let ((shown (filter (lambda (t) (not (equal? t "unread"))) tags)))
@@ -562,7 +580,7 @@
          (total (length (ef--st 'ids)))
          (header (string-append "Feeds — " (number->string (length ids)) "/"
                                 (number->string total) " entries — filter: "
-                                (ef--filter)))
+                                (ef--filter) (ef--progress)))
          (already? (equal? (current-buffer) "*feeds-search*")))
     (ef--st! 'view ids)
     (let loop ((rest ids) (idx 3)
@@ -641,13 +659,21 @@
                      (loop (cdr ls) #f out)
                      (w (cdr ws) (cons (car ws) out)))))))))))
 
-(define ef--show-help "  n/p next/prev · b browser · q back")
+(define ef--show-help
+  "  n/p next/prev · b browser · y copy link · u unread · +/- tag · ? menu · q back")
 
+;; Show `id` and mark it read.
 (define (ef--show id)
+  (when (hash-try-get (ef--st 'db) id)
+    (ef--st! 'current id)
+    (ef--retag id "unread" 'remove)
+    (ef--show-render id 0)))
+
+;; Draw *feeds-entry* for `id` with the cursor on `line` — no read-state
+;; change, so retagging from inside the entry can redraw the meta line.
+(define (ef--show-render id line)
   (let ((e (hash-try-get (ef--st 'db) id)))
     (when e
-      (ef--st! 'current id)
-      (ef--retag id "unread" 'remove)
       (let* ((meta (string-append (hash-try-get e 'feed-title) " — "
                                   (ef--date-string (hash-try-get e 'date))
                                   (let ((ts (ef--tags-suffix (hash-try-get e 'tags))))
@@ -660,10 +686,11 @@
              (body (ef--html->lines (hash-try-get e 'content)))
              (faces (list (list 0 "keyword") (list 1 "function")
                           (list 2 "string") (list 3 "comment"))))
-        (render-buffer "*feeds-entry*" "feeds-show-mode"
-                       (ef--join (append head body) "\n") faces)
+        ((if (equal? (current-buffer) "*feeds-entry*") render-buffer-quiet render-buffer)
+         "*feeds-entry*" "feeds-show-mode"
+         (ef--join (append head body) "\n") faces)
         (clear-overlays)
-        (goto-line 0)))))
+        (goto-line line)))))
 
 ;; ── fetching ────────────────────────────────────────────────────────────────
 ;; Parse the "feeds" option string — whitespace-separated `url` or
@@ -709,6 +736,8 @@
         (let ((feed (car q)))
           (ef--st! 'queue (cdr q))
           (ef--st! 'fetching feed)
+          (when (equal? (current-buffer) "*feeds-search*")
+            (ef--search-render #f 'keep))           ; progress in the header
           (message (string-append "feeds: fetching " (car feed) " …"))
           (http-request "GET" (car feed)
                         (list "User-Agent" *feeds-user-agent*
@@ -744,6 +773,8 @@
 ;; ── commands ────────────────────────────────────────────────────────────────
 (define (feeds)
   (ef--db-load)
+  (unless (member (current-buffer) '("*feeds-search*" "*feeds-entry*"))
+    (ef--st! 'origin (current-buffer)))
   (ef--search-render #t 'top)
   (when (null? (ef--st 'ids))
     (message (if (null? (ef--feeds))
@@ -757,6 +788,7 @@
     ((null? (ef--feeds)) (message "feeds: no feeds configured — set the \"feeds\" option"))
     (else
      (ef--st! 'queue (ef--feeds))
+     (ef--st! 'fetch-total (length (ef--feeds)))
      (ef--st! 'new-count 0)
      (ef--st! 'err-count 0)
      (ef--fetch-next))))
@@ -765,17 +797,34 @@
   (let ((id (ef--entry-at-point)))
     (if id (ef--show id) (message "feeds: no entry on this line"))))
 
+(define (ef--link id)
+  (let ((e (and id (hash-try-get (ef--st 'db) id))))
+    (if e (hash-try-get e 'link) "")))
+
+(define (ef--browse id)
+  (let ((link (ef--link id)))
+    (if (equal? link "")
+        (message "feeds: entry has no link")
+        (begin (open-url link) (message (string-append "feeds: opened " link))))))
+
+(define (ef--yank id)
+  (let ((link (ef--link id)))
+    (if (equal? link "")
+        (message "feeds: entry has no link")
+        (begin (clipboard-set link) (message (string-append "feeds: copied " link))))))
+
 (define (feeds-search-browse)
   (let ((id (ef--entry-at-point)))
     (if (not id)
         (message "feeds: no entry on this line")
-        (let ((e (hash-try-get (ef--st 'db) id)))
+        (begin
           (ef--retag id "unread" 'remove)
           (ef--search-render #f 'keep)
-          (let ((link (hash-try-get e 'link)))
-            (if (equal? link "")
-                (message "feeds: entry has no link")
-                (begin (open-url link) (message (string-append "feeds: opened " link)))))))))
+          (ef--browse id)))))
+
+(define (feeds-search-yank)
+  (let ((id (ef--entry-at-point)))
+    (if id (ef--yank id) (message "feeds: no entry on this line"))))
 
 (define (ef--search-retag tag op advance?)
   (let ((id (ef--entry-at-point)))
@@ -812,8 +861,66 @@
                   (ef--search-render #t 'top))
                 (ef--filter)))
 
+(define (feeds-search-clear-filter)
+  (ef--st! 'filter #f)
+  (ef--search-render #t 'top)
+  (message (string-append "feeds: filter reset to " (ef--filter))))
+
+;; Mark every entry in the current view read — one db save, after a confirm.
+(define (feeds-search-mark-all-read)
+  (let ((ids (filter (lambda (id)
+                       (let ((e (hash-try-get (ef--st 'db) id)))
+                         (and e (member "unread" (hash-try-get e 'tags)))))
+                     (ef--st 'view))))
+    (if (null? ids)
+        (message "feeds: nothing unread in this view")
+        (begin
+          (ef--st! 'confirm
+                   (lambda ()
+                     (for-each
+                      (lambda (id)
+                        (let ((e (hash-try-get (ef--st 'db) id)))
+                          (ef--st! 'db (hash-insert (ef--st 'db) id
+                                                    (hash-insert e 'tags
+                                                                 (filter (lambda (t) (not (equal? t "unread")))
+                                                                         (hash-try-get e 'tags)))))))
+                      ids)
+                     (ef--db-save)
+                     (ef--search-render #f 'keep)
+                     (message (string-append "feeds: marked " (number->string (length ids)) " read"))))
+          (y-or-n-p (string-append "Mark " (number->string (length ids)) " entries read? ")
+                    'feeds--confirm-yes)))))
+
+(define (feeds--confirm-yes ans)
+  (let ((t (ef--st 'confirm)))
+    (ef--st! 'confirm #f)
+    (when (and t (equal? ans "yes")) (t))))
+
 (define (feeds-search-refresh) (ef--search-render #t 'keep))
-(define (feeds-search-quit) (switch-to-buffer "*scratch*"))
+
+;; Back to where `feeds` was opened from, if that buffer is still around.
+(define (feeds-search-quit)
+  (let ((o (ef--st 'origin)))
+    (switch-to-buffer (if (and o (member o (buffer-names))) o "*scratch*"))))
+
+(define (feeds-menu)
+  (transient "Feeds"
+             (list (list "Entry"
+                         (list "o" "Show"            'feeds-search-show)
+                         (list "b" "Open in browser" 'feeds-search-browse)
+                         (list "y" "Copy link"       'feeds-search-yank))
+                   (list "Mark"
+                         (list "r" "Read"            'feeds-search-untag-unread)
+                         (list "u" "Unread"          'feeds-search-tag-unread)
+                         (list "A" "All in view read" 'feeds-search-mark-all-read)
+                         (list "+" "Add tag…"        'feeds-search-tag-all)
+                         (list "-" "Remove tag…"     'feeds-search-untag-all))
+                   (list "View"
+                         (list "s" "Edit filter…"    'feeds-search-set-filter)
+                         (list "c" "Reset filter"    'feeds-search-clear-filter)
+                         (list "g" "Refresh"         'feeds-search-refresh)
+                         (list "G" "Fetch all feeds" 'feeds-update)
+                         (list "q" "Quit"            'feeds-search-quit)))))
 
 ;; show-buffer commands
 ;; Back to the search buffer, cursor parked on the entry we were reading (the
@@ -829,13 +936,41 @@
     (ef--st! 'current #f)
     (ef--search-render #f line)))
 
-(define (feeds-show-browse)
-  (let* ((id (ef--st 'current))
-         (e (and id (hash-try-get (ef--st 'db) id))))
-    (if (and e (not (equal? (hash-try-get e 'link) "")))
-        (begin (open-url (hash-try-get e 'link))
-               (message (string-append "feeds: opened " (hash-try-get e 'link))))
-        (message "feeds: entry has no link"))))
+(define (feeds-show-browse) (ef--browse (ef--st 'current)))
+(define (feeds-show-yank)   (ef--yank (ef--st 'current)))
+
+;; Retag the entry being read and redraw it in place (meta line shows tags).
+(define (ef--show-retag tag op)
+  (let ((id (ef--st 'current)))
+    (when id
+      (ef--retag id tag op)
+      (ef--show-render id (buffer-line)))))
+
+(define (feeds-show-tag-unread)
+  (ef--show-retag "unread" 'add)
+  (message "feeds: marked unread"))
+
+(define (ef--show-read-tag prompt op)
+  (read-string prompt
+               (lambda (input)
+                 (let ((tag (ef--trim input)))
+                   (when (not (equal? tag "")) (ef--show-retag tag op))))))
+
+(define (feeds-show-tag)   (ef--show-read-tag "Add tag: " 'add))
+(define (feeds-show-untag) (ef--show-read-tag "Remove tag: " 'remove))
+
+(define (feeds-show-menu)
+  (transient "Feeds entry"
+             (list (list "Entry"
+                         (list "n" "Next"            'feeds-show-next)
+                         (list "p" "Previous"        'feeds-show-prev)
+                         (list "b" "Open in browser" 'feeds-show-browse)
+                         (list "y" "Copy link"       'feeds-show-yank))
+                   (list "Mark"
+                         (list "u" "Unread"          'feeds-show-tag-unread)
+                         (list "+" "Add tag…"        'feeds-show-tag)
+                         (list "-" "Remove tag…"     'feeds-show-untag)
+                         (list "q" "Back to list"    'feeds-show-quit)))))
 
 (define (ef--show-step dir)
   (let* ((view (ef--st 'view))
@@ -861,15 +996,26 @@
 (define-key "feeds-search-mode" "u"       'feeds-search-tag-unread)
 (define-key "feeds-search-mode" "+"       'feeds-search-tag-all)
 (define-key "feeds-search-mode" "-"       'feeds-search-untag-all)
+(define-key "feeds-search-mode" "shift-a" 'feeds-search-mark-all-read)
+(define-key "feeds-search-mode" "y"       'feeds-search-yank)
 (define-key "feeds-search-mode" "s"       'feeds-search-set-filter)
+(define-key "feeds-search-mode" "c"       'feeds-search-clear-filter)
 (define-key "feeds-search-mode" "g"       'feeds-search-refresh)
 (define-key "feeds-search-mode" "shift-g" 'feeds-update)
+(define-key "feeds-search-mode" "n"       'next-line)
+(define-key "feeds-search-mode" "p"       'previous-line)
+(define-key "feeds-search-mode" "?"       'feeds-menu)
 (define-key "feeds-search-mode" "q"       'feeds-search-quit)
 
 (define-key "feeds-show-mode" "q"       'feeds-show-quit)
 (define-key "feeds-show-mode" "b"       'feeds-show-browse)
+(define-key "feeds-show-mode" "y"       'feeds-show-yank)
+(define-key "feeds-show-mode" "u"       'feeds-show-tag-unread)
+(define-key "feeds-show-mode" "+"       'feeds-show-tag)
+(define-key "feeds-show-mode" "-"       'feeds-show-untag)
 (define-key "feeds-show-mode" "n"       'feeds-show-next)
 (define-key "feeds-show-mode" "p"       'feeds-show-prev)
+(define-key "feeds-show-mode" "?"       'feeds-show-menu)
 
 ;; Motion + scrolling: a "special" read-only buffer bypasses the global evil
 ;; keymaps, so movement must be bound per-mode (Emacs defaults here, modal
@@ -883,12 +1029,15 @@
    (define-key mode "ctrl-n" 'next-line)
    (define-key mode "ctrl-p" 'previous-line)
    (define-key mode "ctrl-v" 'evil-scroll-down)
-   (define-key mode "meta-v" 'evil-scroll-up)
+   ;; The editor spells Meta "alt-" — "meta-v" never matched a keystroke.
+   (define-key mode "alt-v"  'evil-scroll-up)
    (define-key mode "ctrl-d" 'evil-scroll-down)
    (define-key mode "ctrl-u" 'evil-scroll-up)
    (define-key mode "space"  'evil-scroll-down)
    (define-key mode "home"   'beginning-of-buffer)
-   (define-key mode "end"    'end-of-buffer))
+   (define-key mode "end"    'end-of-buffer)
+   (define-key mode "alt-<"  'beginning-of-buffer)
+   (define-key mode "alt->"  'end-of-buffer))
  (list "feeds-search-mode" "feeds-show-mode"))
 
 ;; Modal (evil + helix) overlays: vim motion plus the mode's own keys. In the
@@ -915,6 +1064,11 @@
      (define-key km "shift-g" 'evil-goto-last-line)))
  (list "evil-normal:" "helix-normal:"))
 
+;; No line-number gutter: these are list/reading views, not code (the same
+;; per-mode option core's `define-list-mode-keys` sets).
+(set-option "line-numbers:feeds-search-mode" "false")
+(set-option "line-numbers:feeds-show-mode" "false")
+
 (define-key "fundamental" "ctrl-c f" 'feeds)
 
 (register-command "feeds")
@@ -928,7 +1082,16 @@
 (register-command "feeds-search-set-filter")
 (register-command "feeds-search-refresh")
 (register-command "feeds-search-quit")
+(register-command "feeds-search-yank")
+(register-command "feeds-search-clear-filter")
+(register-command "feeds-search-mark-all-read")
+(register-command "feeds-menu")
 (register-command "feeds-show-quit")
 (register-command "feeds-show-browse")
+(register-command "feeds-show-yank")
+(register-command "feeds-show-tag-unread")
+(register-command "feeds-show-tag")
+(register-command "feeds-show-untag")
+(register-command "feeds-show-menu")
 (register-command "feeds-show-next")
 (register-command "feeds-show-prev")

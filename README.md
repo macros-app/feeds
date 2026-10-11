@@ -11,7 +11,12 @@ Steel.
 - **Persistent database** (`~/.macros-feeds-db`) — read/unread state, tags,
   and content survive restarts.
 - **Async fetch** via the editor's `http-request` primitive: feeds download on
-  a worker thread, one at a time off a queue; the UI never blocks.
+  a worker thread, one at a time off a queue; the UI never blocks. Progress
+  shows in the search header (`fetching 2/3`).
+- **Discoverable** — `?` in either buffer opens a menu of every command, so
+  there's nothing to memorize.
+
+![The *feeds-search* buffer: entries newest first, unread in bold, read ones dimmed, tags at the end of each line](docs/search.png)
 
 ## Install
 
@@ -39,7 +44,8 @@ you can instead set the `*feeds-list*` list: URL strings or
 
 ## Use
 
-`M-x feeds` or `C-c f`, then `G` to fetch.
+`M-x feeds` or `C-c f`, then `G` to fetch. Press `?` at any point for a
+menu of everything you can do in the current buffer.
 
 ### *feeds-search*
 
@@ -47,12 +53,20 @@ you can instead set the `*feeds-list*` list: URL strings or
 |----------------|---------------------------------------------------|
 | `enter`/click  | show the entry (marks it read)                    |
 | `b`            | open the entry's link in the browser (marks read) |
-| `r` / `u`      | mark read / unread                                |
+| `y`            | copy the entry's link to the clipboard            |
+| `r` / `u`      | mark read / unread (and move down)                |
+| `A`            | mark every entry in the view read (asks first)    |
 | `+` / `-`      | add / remove a tag on the entry at point          |
 | `s`            | edit the filter                                   |
+| `c`            | reset the filter to the default                   |
 | `g`            | refresh the view from the database                |
-| `G`            | fetch all feeds                                   |
-| `q`            | quit                                              |
+| `G`            | fetch all feeds (progress shows in the header)    |
+| `n` / `p`      | next / previous line                              |
+| `?`            | menu of every command                             |
+| `q`            | back to the buffer you opened `feeds` from        |
+
+Emacs motion works throughout: `C-n`/`C-p`, `C-v`/`M-v`, `M-<`/`M->`,
+`space` to page down.
 
 Under evil/helix, `j`/`k`/`gg` move as usual; in the search buffer `G`
 fetches (as in vanilla elfeed — use `end` or `C-d` for the bottom), while in
@@ -67,10 +81,16 @@ the view until the next refresh — even under the default `+unread` filter.
 
 ### *feeds-entry*
 
+![The *feeds-entry* buffer: title, feed, date and tags, the link, then the entry rendered as text](docs/entry.png)
+
 | key       | action                                |
 |-----------|---------------------------------------|
 | `n` / `p` | next / previous entry in the view     |
 | `b`       | open this entry's link in the browser |
+| `y`       | copy this entry's link                |
+| `u`       | mark this entry unread again          |
+| `+` / `-` | add / remove a tag                    |
+| `?`       | menu of every command                 |
 | `q`       | back to the search buffer             |
 
 ### Filter language

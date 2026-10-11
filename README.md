@@ -47,12 +47,20 @@ you can instead set the `*feeds-list*` list: URL strings or
 |----------------|---------------------------------------------------|
 | `enter`/click  | show the entry (marks it read)                    |
 | `b`            | open the entry's link in the browser (marks read) |
-| `r` / `u`      | mark read / unread                                |
+| `y`            | copy the entry's link to the clipboard            |
+| `r` / `u`      | mark read / unread (and move down)                |
+| `A`            | mark every entry in the view read (asks first)    |
 | `+` / `-`      | add / remove a tag on the entry at point          |
 | `s`            | edit the filter                                   |
+| `c`            | reset the filter to the default                   |
 | `g`            | refresh the view from the database                |
-| `G`            | fetch all feeds                                   |
-| `q`            | quit                                              |
+| `G`            | fetch all feeds (progress shows in the header)    |
+| `n` / `p`      | next / previous line                              |
+| `?`            | menu of every command                             |
+| `q`            | back to the buffer you opened `feeds` from        |
+
+Emacs motion works throughout: `C-n`/`C-p`, `C-v`/`M-v`, `M-<`/`M->`,
+`space` to page down.
 
 Under evil/helix, `j`/`k`/`gg` move as usual; in the search buffer `G`
 fetches (as in vanilla elfeed — use `end` or `C-d` for the bottom), while in
@@ -71,6 +79,10 @@ the view until the next refresh — even under the default `+unread` filter.
 |-----------|---------------------------------------|
 | `n` / `p` | next / previous entry in the view     |
 | `b`       | open this entry's link in the browser |
+| `y`       | copy this entry's link                |
+| `u`       | mark this entry unread again          |
+| `+` / `-` | add / remove a tag                    |
+| `?`       | menu of every command                 |
 | `q`       | back to the search buffer             |
 
 ### Filter language
